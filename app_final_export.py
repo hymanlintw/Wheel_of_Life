@@ -26,6 +26,10 @@ st.markdown("""
     input[type="text"] {
         autocomplete: off;
     }
+    /* 調整表格字體大小 */
+    div[data-testid="stTable"] td, div[data-testid="stTable"] th {
+        font-size: 16px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -40,7 +44,7 @@ def get_font_properties():
         # 回退機制：嘗試使用系統常見中文字型
         return fm.FontProperties(family=['Microsoft JhengHei', 'SimHei', 'Arial Unicode MS'])
 
-# 配置 Matplotlib 全局設定 (盡量避免方塊字)
+# 配置 Matplotlib 全局設定
 try:
     if os.path.exists(FONT_PATH):
         custom_font = fm.FontProperties(fname=FONT_PATH)
@@ -95,7 +99,6 @@ initialize_state()
 
 
 # --- 4. 所有邏輯函數定義 (Logic Functions) ---
-# 必須放在 if/elif 渲染邏輯之前！
 
 def get_sorting_status(prefix):
     """通用排序邏輯 (堆疊回溯法)"""
@@ -193,7 +196,7 @@ def process_stage2_input(category, k1, k2, k3):
     for word in inputs:
         st.session_state.keyword_to_category[word] = category
     
-    # 初始化 Stage 3 狀態
+    # 初始化 Stage 3 狀態 (3次比較)
     st.session_state.stage3_comp_status[category] = {
         'A': inputs[0], 'B': inputs[1], 'C': inputs[2], 
         'step': 1, 'winner': None
@@ -207,13 +210,12 @@ def stage2_go_back():
     """Stage 2: 回上一頁"""
     if st.session_state.current_keyword_index > 0:
         st.session_state.current_keyword_index -= 1
-        # 不刪除資料，保留以供顯示，僅退回索引
         st.rerun()
     else:
         st.warning("已是第一個項目。")
 
 def get_stage3_comparison():
-    """Stage 3: 取得比較對象 (3步驟邏輯)"""
+    """Stage 3: 取得比較對象 (3步驟邏輯: A vs B, Win1 vs C, Win2 vs Loser1)"""
     cat_list = st.session_state.initial_ranked_results
     current_cat = cat_list[st.session_state.stage3_cat_idx]
     status = st.session_state.stage3_comp_status[current_cat]
@@ -247,7 +249,7 @@ def record_stage3_win(winner, loser):
     elif status['step'] < 3:
         status['step'] += 1
     else:
-        # 完成
+        # 完成 (代表詞為 winner)
         st.session_state.deepest_keywords[current_cat] = winner
         st.session_state.stage3_cat_idx += 1
         status['step'] = 1
@@ -272,7 +274,7 @@ def create_radar_chart():
     scores += scores[:1]
     angles += angles[:1]
 
-    font_prop = get_font_properties() # 使用上方定義的字型載入函數
+    font_prop = get_font_properties()
 
     fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
     ax.plot(angles, scores, color='#1E88E5', linewidth=1, linestyle='solid')
@@ -294,7 +296,7 @@ def create_radar_chart():
     return buf
 
 def generate_excel_report():
-    """生成 Excel (A4, 16pt, JhengHei)"""
+    """生成 Excel (A4, 16pt, JhengHei, 上下半部佈局)"""
     output = io.BytesIO()
     workbook = pd.ExcelWriter(output, engine='xlsxwriter')
     
@@ -316,20 +318,20 @@ def generate_excel_report():
     fmt_th = workbook.book.add_format({'bold': True, 'align': 'center', 'bg_color': '#4CAF50', 'font_color': 'white', 'border': 1, 'font_size': font_size, 'font_name': font_name})
     fmt_center = workbook.book.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'font_size': font_size, 'font_name': font_name})
     
-    # 欄寬
-    worksheet.set_column('A:A', 6)
-    worksheet.set_column('B:B', 20)
-    worksheet.set_column('C:E', 15)
-    worksheet.set_column('F:F', 20)
+    # 欄寬 (配合版面)
+    worksheet.set_column('A:A', 6)  # 順位
+    worksheet.set_column('B:B', 20) # 表意識
+    worksheet.set_column('C:E', 15) # 聯想詞
+    worksheet.set_column('F:F', 20) # 潛意識
 
-    # 上半部：標題
+    # --- 上半部 ---
     worksheet.merge_range('A1:F1', '人生八輪協談紀錄表', fmt_header)
 
-    # 上左：雷達圖 (A2)
+    # 左：雷達圖 (A2)
     radar_buf = create_radar_chart()
     worksheet.insert_image('A2', 'radar.png', {'image_data': radar_buf, 'x_scale': 1.1, 'y_scale': 1.1})
     
-    # 上右：基本資料 (D2-F7)
+    # 右：基本資料 (D2-F7)
     info = st.session_state.user_info
     worksheet.write('D2', '基本資料', workbook.book.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'font_name': font_name}))
     
@@ -344,7 +346,7 @@ def generate_excel_report():
         worksheet.write(lbl_cell, lbl_txt, fmt_label)
         worksheet.merge_range(val_cell, val_txt, fmt_value)
 
-    # 下半部：表格 (Row 15)
+    # --- 下半部：對照表格 ---
     row_idx = 14
     worksheet.write(row_idx, 0, '順位', fmt_th)
     worksheet.write(row_idx, 1, '表意識', fmt_th)
@@ -379,7 +381,6 @@ def generate_excel_report():
 
 
 # --- 5. 主畫面渲染流程 (Main Render Loop) ---
-# 這是修正 SyntaxError 的關鍵：保證只有這一個 if-elif-elif 鏈
 
 if st.session_state.stage == 0:
     # --- Stage 0: 資料與權重 ---
@@ -433,7 +434,6 @@ elif st.session_state.stage == 2:
     prev_kws = st.session_state.keywords_map.get(current_cat, ["", "", ""])
     
     with st.form(key=f"form_{current_cat}"): 
-        # autocomplete="off" 已在 CSS 中全域設定
         k1 = st.text_input("聯想詞 1", value=prev_kws[0], key=f"k1_{current_cat}")
         k2 = st.text_input("聯想詞 2", value=prev_kws[1], key=f"k2_{current_cat}")
         k3 = st.text_input("聯想詞 3", value=prev_kws[2], key=f"k3_{current_cat}")
@@ -473,21 +473,47 @@ elif st.session_state.stage == 5:
     st.balloons()
     st.title("🎉 協談完成！")
     
-    # 預覽
+    # 預覽雷達圖
     radar_buf = create_radar_chart()
     st.image(radar_buf, caption='權重圖')
     
     st.divider()
-    st.subheader("潛意識最終排序")
+    st.subheader("最終協談結果分析表")
     
-    final_data = []
-    for i, kw in enumerate(st.session_state.final_ranked_results):
-        origin = st.session_state.keyword_to_category.get(kw, "未知")
-        final_data.append([i + 1, origin, kw])
+    # 準備顯示用的表格資料 (與 Excel 結構一致)
+    conscious_list = st.session_state.initial_ranked_results
+    subconscious_keywords = st.session_state.final_ranked_results
     
-    df_final = pd.DataFrame(final_data, columns=["順位", "八輪面向", "核心關鍵字"])
-    st.table(df_final.set_index('順位'))
+    table_data = []
+    for i in range(8):
+        # 1. 順位
+        rank = i + 1
         
+        # 2. 表意識
+        c_item = conscious_list[i] if i < len(conscious_list) else ""
+        
+        # 3. 聯想詞
+        kw_list = st.session_state.keywords_map.get(c_item, ["", "", ""])
+        
+        # 4. 潛意識 (抓出對應的面向名稱)
+        s_item = ""
+        if i < len(subconscious_keywords):
+            s_kw = subconscious_keywords[i]
+            s_item = st.session_state.keyword_to_category.get(s_kw, "")
+            
+        table_data.append({
+            "順位": rank,
+            "表意識": c_item,
+            "聯想詞 1": kw_list[0],
+            "聯想詞 2": kw_list[1],
+            "聯想詞 3": kw_list[2],
+            "潛意識": s_item
+        })
+    
+    # 顯示為靜態表格，清楚呈現對照
+    df_display = pd.DataFrame(table_data)
+    st.table(df_display.set_index("順位"))
+    
     st.divider()
     excel_file = generate_excel_report()
     st.download_button(
