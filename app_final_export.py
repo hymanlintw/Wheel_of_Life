@@ -489,3 +489,58 @@ elif st.session_state.stage == 5:
 
 # 由於篇幅限制，Stage 0, 1, 3, 4 的渲染邏輯將保持與上一版一致
 # ... (Stage 0, 1, 3, 4 渲染邏輯請參考上一版程式碼)
+
+# ... (Stage 5 的 elif st.session_state.stage == 5: 結束之後) ...
+
+# Stage 0: 基本資料與權重 (如果Stage 0的邏輯已在前面寫完，這裡不需要再寫)
+
+# Stage 1 渲染邏輯
+elif st.session_state.stage == 1:
+    st.title("🧬 第一階段：表意識排序")
+    st.caption("請依直覺選擇，程式會找出您目前最重視的面向。")
+    status, p1, p2 = get_sorting_status('initial_')
+    if status == "ASK":
+        st.subheader(f"哪一個比較重要？")
+        c1, c2 = st.columns(2)
+        if c1.button(f"🅰️ {p1}", key=f"s1_{p1}", use_container_width=True): record_sorting_win('initial_', p1, p2)
+        if c2.button(f"🅱️ {p2}", key=f"s1_{p2}", use_container_width=True): record_sorting_win('initial_', p2, p1)
+
+# Stage 3 渲染邏輯
+elif st.session_state.stage == 3:
+    cat_list = st.session_state.initial_ranked_results
+    current_cat = cat_list[st.session_state.stage3_cat_idx]
+    
+    status_type, p1, p2 = get_stage3_comparison()
+    
+    st.title(f"💖 第三階段：深層感受提煉 (項目 {st.session_state.stage3_cat_idx+1}/8)")
+    st.caption(f"針對「{current_cat}」的聯想詞，請選出感受較深刻的詞。")
+    st.progress((st.session_state.stage3_cat_idx + (st.session_state.stage3_comp_status[current_cat]['step'] / 3)) / 8)
+    
+    if status_type == "ASK":
+        st.subheader(f"哪一個感受比較深刻？")
+        st.info(f"這是 {current_cat} 的第 {st.session_state.stage3_comp_status[current_cat]['step']} 次比較 (共 3 次)")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"{p1}", key=f"s3_l_{p1}", use_container_width=True):
+                record_stage3_win(p1, p2)
+        with col2:
+            if st.button(f"{p2}", key=f"s3_r_{p2}", use_container_width=True):
+                record_stage3_win(p2, p1)
+
+# Stage 4 渲染邏輯
+elif st.session_state.stage == 4:
+    st.title("✨ 第四階段：潛意識最終排序")
+    st.caption("請根據這些關鍵字背後的深層意義，選出對您生命更重要的一方。")
+    status, p1, p2 = get_sorting_status('final_')
+    if status == "ASK":
+        st.subheader(f"哪一個對你的生命更重要？")
+        c1, c2 = st.columns(2)
+        if c1.button(f"🅰️ {p1}", key=f"s4_{p1}", use_container_width=True): record_sorting_win('final_', p1, p2)
+        if c2.button(f"🅱️ {p2}", key=f"s4_{p2}", use_container_width=True): record_sorting_win('final_', p2, p1)
+
+# Stage 0 渲染邏輯 (如果前面沒有寫，則補上 Stage 0 的邏輯)
+elif st.session_state.stage == 0:
+    # 這裡應該是 Stage 0 的渲染邏輯，但因為它通常在檔案開頭，這裡只需要確保結構完整。
+    pass # 如果前面已經寫了 Stage 0，這裡用 pass 即可
+
+
