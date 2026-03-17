@@ -1,190 +1,227 @@
 import streamlit as st
-import time
+import pandas as pd
 
-# --- 1. 頁面基本設定 ---
-st.set_page_config(page_title="人生八輪深度排序", page_icon="🧬")
+# --- 1. 定義常數 ---
+ALL_CATEGORIES = ["健康", "工作", "家庭", "休閒", "情緒", "成長", "人際", "財富"]
 
-# CSS 優化按鈕視覺
-st.markdown("""
-    <style>
-    div.stButton > button {
-        height: 120px;
-        width: 100%;
-        font-size: 26px;
-        border-radius: 12px;
-        border: 2px solid #1E88E5;
-        background-color: white;
-        color: #1E88E5;
-        transition: all 0.3s;
-    }
-    div.stButton > button:hover {
-        background-color: #E3F2FD;
-        transform: scale(1.02);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .rank-card {
-        padding: 10px;
-        background-color: #f0f2f6;
-        border-radius: 8px;
-        margin-bottom: 5px;
-        border-left: 5px solid #4CAF50;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# --- 2. 初始化變數 (State Management) ---
-if 'initialized' not in st.session_state:
-    # 原始清單
-    st.session_state.candidates = ["健康", "工作", "家庭", "休閒", "情緒", "成長", "人際", "財富"]
-    # 最終排名結果
-    st.session_state.ranked_results = []
-    # 歷史堆疊 (Stack)：用來存「被挑戰者打敗的前任擂台主」
-    st.session_state.history_stack = []
-    # 勝負紀錄 (Cache)：避免重複問問題 {(贏家, 輸家): True}
-    st.session_state.match_history = {}
-    
-    # 遊戲狀態指標
-    st.session_state.current_champion = st.session_state.candidates[0] # 目前擂台主
-    st.session_state.challenger_idx = 1 # 挑戰者在 candidates 中的索引位置
-    st.session_state.initialized = True
-
-# --- 3. 核心邏輯函數 ---
-
-def record_win(winner, loser):
-    """記錄勝負並調整狀態"""
-    # 寫入快取：記住誰贏誰，避免未來重複問
-    st.session_state.match_history[(winner, loser)] = True
-    
-    # 邏輯判斷
-    if winner == st.session_state.current_champion:
-        # 擂台主衛冕成功 -> 挑戰者換下一位
-        st.session_state.challenger_idx += 1
-    else:
-        # 擂台主輸了 -> 
-        # 1. 舊擂台主入庫 (Stack) 等待復活
-        st.session_state.history_stack.append(st.session_state.current_champion)
-        # 2. 挑戰者成為新擂台主
-        st.session_state.current_champion = winner
-        # 3. 繼續挑戰列表中的下一位
-        st.session_state.challenger_idx += 1
-
-def get_next_battle():
-    """
-    計算下一場戰鬥。
-    這個函數會自動跑迴圈 (Auto-Loop)，直到遇到：
-    1. 需要使用者回答的問題 (Return: 'ASK', p1, p2)
-    2. 全部排完 (Return: 'DONE')
-    """
-    
-    while len(st.session_state.candidates) > 0:
+# --- 2. 狀態初始化 (解決執行不出來的核心問題) ---
+def init_game():
+    if 'stage' not in st.session_state:
+        st.session_state.stage = 1
         
-        # 狀況 A：目前的擂台主已經比完列表後面所有的人 -> 確定是當前第一名
-        if st.session_state.challenger_idx >= len(st.session_state.candidates):
-            # 1. 將冠軍加入最終名單
-            winner = st.session_state.current_champion
-            st.session_state.ranked_results.append(winner)
-            
-            # 2. 從候選清單中移除
-            st.session_state.candidates.remove(winner)
-            
-            # 3. 決定下一輪的擂台主是誰 (回溯邏輯)
-            if len(st.session_state.candidates) == 0:
-                return "DONE", None, None
-            
-            if st.session_state.history_stack:
-                # 優先從堆疊 (Stack) 中復活上一個認為重要的 (如邏輯中的 E, 然後 A)
-                # 但要注意，復活的人必須還在 candidates 裡 (防止已排名的被重複抓)
-                while st.session_state.history_stack:
-                    resurrected = st.session_state.history_stack.pop()
-                    if resurrected in st.session_state.candidates:
-                        st.session_state.current_champion = resurrected
-                        break
-                else:
-                    # 如果 stack 裡的人都已經畢業了，就抓清單第一個 (如邏輯中的 B)
-                    st.session_state.current_champion = st.session_state.candidates[0]
+        # 第一階段 (Initial Sorting) 變數
+        st.session_state.initial_candidates = list(ALL_CATEGORIES)
+        st.session_state.initial_ranked_results = []
+        st.session_state.initial_history_stack = []
+        st.session_state.initial_match_history = {}
+        st.session_state.initial_current_champion = st.session_state.initial_candidates[0]
+        st.session_state.initial_challenger_idx = 1
+        
+        # 第二階段 (Keywords) 變數
+        st.session_state.keywords_data = {} # 存 {面向: [A, B, C]}
+        st.session_state.kw_step_idx = 0 # 目前填到第幾個面向
+        
+        # 第三階段 (Selection) 變數
+        st.session_state.s3_cat_idx = 0 # 正在處理第幾個面向的代表詞
+        st.session_state.s3_sub_step = 1 # 1: A vs B, 2: Winner vs C
+        st.session_state.s3_temp_winner = None
+        st.session_state.representative_keywords = {} # 存 8 個最終代表詞
+        
+        # 第四階段 (Final Sorting) 變數
+        st.session_state.final_candidates = []
+        st.session_state.final_ranked_results = []
+        st.session_state.final_history_stack = []
+        st.session_state.final_match_history = {}
+        st.session_state.final_current_champion = None
+        st.session_state.final_challenger_idx = 1
+
+init_game()
+
+# --- 3. 通用排序引擎 (用於第一階段與第四階段) ---
+def get_sort_status(prefix):
+    candidates = st.session_state[f'{prefix}candidates']
+    if not candidates:
+        return "DONE", None, None
+    
+    idx = st.session_state[f'{prefix}challenger_idx']
+    
+    # 如果挑戰者索引超過長度，代表當前冠軍勝出
+    if idx >= len(candidates):
+        winner = st.session_state[f'{prefix}current_champion']
+        st.session_state[f'{prefix}ranked_results'].append(winner)
+        candidates.remove(winner)
+        
+        if not candidates:
+            return "DONE", None, None
+        
+        # 尋找下一個擂台主 (回溯邏輯)
+        if st.session_state[f'{prefix}history_stack']:
+            while st.session_state[f'{prefix}history_stack']:
+                resurrected = st.session_state[f'{prefix}history_stack'].pop()
+                if resurrected in candidates:
+                    st.session_state[f'{prefix}current_champion'] = resurrected
+                    break
             else:
-                # 堆疊空的，抓清單第一個
-                st.session_state.current_champion = st.session_state.candidates[0]
+                st.session_state[f'{prefix}current_champion'] = candidates[0]
+        else:
+            st.session_state[f'{prefix}current_champion'] = candidates[0]
             
-            # 4. 重置挑戰者索引 (從擂台主的下一位開始比)
-            # 因為清單變短了，要重新抓 index
-            current_champ_idx = st.session_state.candidates.index(st.session_state.current_champion)
-            st.session_state.challenger_idx = current_champ_idx + 1
-            
-            # 繼續迴圈，處理下一輪
-            continue
-
-        # 狀況 B：還有挑戰者，準備進行比較
-        challenger = st.session_state.candidates[st.session_state.challenger_idx]
-        champion = st.session_state.current_champion
-        
-        # 檢查快取：這兩人是否比過？(例如 A 曾在上一輪贏過 B)
-        if (champion, challenger) in st.session_state.match_history:
-            # Champion 曾贏過 -> 自動判定勝，繼續下一位
-            st.session_state.challenger_idx += 1
-            continue
-        elif (challenger, champion) in st.session_state.match_history:
-            # Challenger 曾贏過 -> 自動判定勝 (換人)，繼續下一位
-            st.session_state.history_stack.append(champion)
-            st.session_state.current_champion = challenger
-            st.session_state.challenger_idx += 1
-            continue
-        
-        # 狀況 C：沒比過，必須問使用者
-        return "ASK", champion, challenger
-
-    return "DONE", None, None
-
-# --- 4. 介面渲染 (UI Rendering) ---
-
-st.title("🧬 人生價值觀深度排序")
-st.progress(len(st.session_state.ranked_results) / 8, text="排序進度")
-
-# 執行邏輯引擎，取得當前狀態
-status, p1, p2 = get_next_battle()
-
-if status == "ASK":
-    st.write("")
-    st.markdown(f"### ⚔️ 靈魂拷問：哪一個對你更重要？")
-    st.caption("請依直覺選擇，程式會自動記憶並推算後續結果。")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button(f"🅰️ {p1}", key="btn_p1"):
-            record_win(p1, p2)
-            st.rerun() # 重新執行以載入下一題
-
-    with col2:
-        if st.button(f"🅱️ {p2}", key="btn_p2"):
-            record_win(p2, p1)
-            st.rerun()
-
-elif status == "DONE":
-    st.balloons()
-    st.success("🎉 分析完成！這是你潛意識中的價值排序：")
-    
-    st.markdown("---")
-    for i, item in enumerate(st.session_state.ranked_results):
-        rank = i + 1
-        # 前三名給予特殊樣式
-        medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"No.{rank}"
-        st.markdown(f"""
-        <div class="rank-card">
-            <span style="font-size:1.2em; font-weight:bold;">{medal} &nbsp; {item}</span>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    st.markdown("---")
-    if st.button("🔄 重新測試"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        st.session_state[f'{prefix}challenger_idx'] = candidates.index(st.session_state[f'{prefix}current_champion']) + 1
         st.rerun()
 
-# --- 顯示除錯資訊 (可選，讓你知道程式在想什麼) ---
-# with st.expander("🔍 查看程式邏輯狀態 (Debug)"):
-#     st.write(f"已排名: {st.session_state.ranked_results}")
-#     st.write(f"剩餘清單: {st.session_state.candidates}")
-#     st.write(f"歷史堆疊(Stack): {st.session_state.history_stack}")
-#     st.write(f"目前擂台主: {st.session_state.current_champion}")
-#     st.write(f"下一位對手索引: {st.session_state.challenger_idx}")
+    champ = st.session_state[f'{prefix}current_champion']
+    challenger = candidates[idx]
+    
+    # 檢查是否比過
+    if (champ, challenger) in st.session_state[f'{prefix}match_history'] or (challenger, champ) in st.session_state[f'{prefix}match_history']:
+        st.session_state[f'{prefix}challenger_idx'] += 1
+        st.rerun()
+        
+    return "ASK", champ, challenger
+
+def record_win(prefix, winner, loser):
+    st.session_state[f'{prefix}match_history'][(winner, loser)] = True
+    if winner != st.session_state[f'{prefix}current_champion']:
+        st.session_state[f'{prefix}history_stack'].append(st.session_state[f'{prefix}current_champion'])
+        st.session_state[f'{prefix}current_champion'] = winner
+    st.session_state[f'{prefix}challenger_idx'] += 1
+    st.rerun()
+
+# --- 4. 介面渲染邏輯 ---
+
+st.set_page_config(page_title="人生八輪協談系統", layout="centered")
+
+# 第一階段：表意識排序
+if st.session_state.stage == 1:
+    st.title("第一階段：表意識價值排序")
+    status, p1, p2 = get_sort_status("initial_")
+    
+    if status == "ASK":
+        st.subheader("這兩個面向，哪一個對您目前更重要？")
+        col1, col2 = st.columns(2)
+        if col1.button(f"{p1}", use_container_width=True): record_win("initial_", p1, p2)
+        if col2.button(f"{p2}", use_container_width=True): record_win("initial_", p2, p1)
+    else:
+        st.success("排序完成！")
+        if st.button("下一步：聯想關鍵字"):
+            st.session_state.stage = 2
+            st.rerun()
+
+# 第二階段：關鍵字輸入
+elif st.session_state.stage == 2:
+    idx = st.session_state.kw_step_idx
+    ranked_order = st.session_state.initial_ranked_results
+    current_cat = ranked_order[idx]
+    
+    st.title("第二階段：關鍵字聯想")
+    st.subheader(f"看到或聽到「{current_cat}」，您想到什麼？")
+    st.write(f"請列舉 3 項 (目前進度: {idx+1}/8)")
+    
+    with st.form("kw_form"):
+        a = st.text_input("聯想詞 A", key=f"in_a_{idx}")
+        b = st.text_input("聯想詞 B", key=f"in_b_{idx}")
+        c = st.text_input("聯想詞 C", key=f"in_c_{idx}")
+        if st.form_submit_button("儲存並繼續"):
+            kws = [a.strip(), b.strip(), c.strip()]
+            if "" in kws or len(set(kws)) < 3 or any(k in ALL_CATEGORIES for k in kws):
+                st.error("請確保填寫 3 個不同詞彙，且不能包含面向名稱。")
+            else:
+                st.session_state.keywords_data[current_cat] = kws
+                st.session_state.kw_step_idx += 1
+                if st.session_state.kw_step_idx >= 8:
+                    st.session_state.stage = 3
+                st.rerun()
+
+# 第三階段：代表詞提煉 (A vs B, Win vs C)
+elif st.session_state.stage == 3:
+    idx = st.session_state.s3_cat_idx
+    ranked_order = st.session_state.initial_ranked_results
+    current_cat = ranked_order[idx]
+    words = st.session_state.keywords_data[current_cat] # [A, B, C]
+    
+    st.title("第三階段：代表詞提煉")
+    st.write(f"針對「{current_cat}」，哪一個聯想感覺更深刻？")
+    
+    if st.session_state.s3_sub_step == 1:
+        p1, p2 = words[0], words[1] # A vs B
+    else:
+        p1, p2 = st.session_state.s3_temp_winner, words[2] # Win vs C
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button(p1, key="s3_b1", use_container_width=True):
+            if st.session_state.s3_sub_step == 1:
+                st.session_state.s3_temp_winner = p1
+                st.session_state.s3_sub_step = 2
+            else:
+                st.session_state.representative_keywords[current_cat] = p1
+                st.session_state.s3_cat_idx += 1
+                st.session_state.s3_sub_step = 1
+                if st.session_state.s3_cat_idx >= 8:
+                    # 準備進入第四階段
+                    st.session_state.final_candidates = list(st.session_state.representative_keywords.values())
+                    st.session_state.final_current_champion = st.session_state.final_candidates[0]
+                    st.session_state.stage = 4
+            st.rerun()
+    with col2:
+        if st.button(p2, key="s3_b2", use_container_width=True):
+            if st.session_state.s3_sub_step == 1:
+                st.session_state.s3_temp_winner = p2
+                st.session_state.s3_sub_step = 2
+            else:
+                st.session_state.representative_keywords[current_cat] = p2
+                st.session_state.s3_cat_idx += 1
+                st.session_state.s3_sub_step = 1
+                if st.session_state.s3_cat_idx >= 8:
+                    st.session_state.final_candidates = list(st.session_state.representative_keywords.values())
+                    st.session_state.final_current_champion = st.session_state.final_candidates[0]
+                    st.session_state.stage = 4
+            st.rerun()
+
+# 第四階段：潛意識最終排序
+elif st.session_state.stage == 4:
+    st.title("第四階段：潛意識最終排序")
+    status, p1, p2 = get_sort_status("final_")
+    
+    if status == "ASK":
+        st.subheader("這兩個深刻感受，哪一個更觸動您的內心？")
+        col1, col2 = st.columns(2)
+        if col1.button(f"{p1}", use_container_width=True): record_win("final_", p1, p2)
+        if col2.button(f"{p2}", use_container_width=True): record_win("final_", p2, p1)
+    else:
+        st.success("潛意識排序分析完成！")
+        if st.button("查看最終對照分析報告"):
+            st.session_state.stage = 5
+            st.rerun()
+
+# 第五階段：結果報告
+elif st.session_state.stage == 5:
+    st.title("📊 最終諮商報告")
+    
+    # 建立對照表資料
+    final_order = st.session_state.final_ranked_results
+    # 建立 反向查詢 (關鍵字 -> 面向)
+    lookup = {v: k for k, v in st.session_state.representative_keywords.items()}
+    
+    report_data = []
+    for i, kw in enumerate(final_order):
+        report_data.append({
+            "潛意識順位": i + 1,
+            "深刻代表詞 (潛意識)": kw,
+            "對應人生面向": lookup.get(kw, "")
+        })
+    
+    st.table(report_data)
+    
+    # 對比表意識
+    st.subheader("💡 表意識 vs 潛意識 順位對比")
+    comparison = pd.DataFrame({
+        "順位": range(1, 9),
+        "表意識 (第一階段)": st.session_state.initial_ranked_results,
+        "潛意識 (第四階段對應)": [lookup.get(kw, "") for kw in final_order]
+    })
+    st.dataframe(comparison, hide_index=True)
+    
+    if st.button("重啟測驗"):
+        st.session_state.clear()
+        st.rerun()
